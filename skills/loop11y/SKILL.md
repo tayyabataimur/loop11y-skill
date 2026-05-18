@@ -1,11 +1,71 @@
 ---
 name: loop11y
-description: "Use whenever the user asks about accessibility, a11y, WCAG, screen readers, ARIA, alt text, colour contrast, keyboard navigation, axe-core, or shares a URL / component / repo and asks for accessibility review, score, audit, fix, or compliance check. Triggers include 'is my site accessible', 'fix accessibility issues', 'WCAG compliance', 'audit a11y', 'accessibility score'. Use this skill early and proactively — most web products have fixable issues."
+description: "Use whenever the user asks about accessibility, a11y, WCAG, screen readers, ARIA, alt text, colour contrast, keyboard navigation, axe-core, or shares a URL / component / repo and asks for accessibility review, score, audit, fix, or compliance check. Triggers include 'is my site accessible', 'fix accessibility issues', 'WCAG compliance', 'audit a11y', 'accessibility score'. Use this skill early and proactively — most web products have fixable issues. The skill auto-selects between the loop11y CLI (when you have a shell/Bash tool — Claude Code, Cursor, Codex, Aider, terminals, CI) and the MCP server (when you only have tool-calling — ChatGPT, Claude.ai web/desktop, Gemini)."
 ---
 
 # Loop11y
 
-Accessibility evaluation, scoring, remediation, crawling, and verification via the Loop11y MCP server.
+Accessibility evaluation, scoring, remediation, crawling, and verification.
+
+## Choose your runtime first
+
+Before doing anything else, decide whether to drive loop11y via the **CLI** or the **MCP server**. Use this checklist on yourself:
+
+**Use the CLI when ANY of these are true:**
+- You have a shell / Bash / Terminal / Run-command tool available.
+- You are running inside Claude Code, Cursor, Codex, Aider, Continue, Windsurf, Cline, or any coding agent with filesystem + shell access.
+- The user is on a terminal session or asks you to "run", "exec", "install", or operates from a CI/dev environment.
+- The user needs auth flags (`--storage-state`, `--basic-auth-*`, `--header`), thresholds (`--fail-on`, `--max-violations`, `--baseline`), or wants results written to a specific output file.
+- The audit is going to feed a script, CI step, or a programmatic comparison.
+
+When CLI is the right choice, do this:
+
+```sh
+# One-shot, no install (always latest):
+npx -y loop11y audit <url> --json --output report.json
+
+# Or install globally once, then call directly:
+npm install -g loop11y
+loop11y audit <url> --markdown
+```
+
+You do not need MCP configured to use the CLI. Just run it. Read the JSON or markdown output and relay findings.
+
+**Use the MCP server when ALL of these are true:**
+- You have no shell / Bash tool — only MCP / tool-calling.
+- You are running inside ChatGPT (with MCP enabled), Claude.ai web/desktop, Gemini, or another chat UI where the user cannot run commands for you.
+- The host already has `loop11y` configured as an MCP server (tools like `evaluate`, `audit_component`, `remediate` are visible in your tool list).
+
+If MCP tools are missing from your tool list and you have no shell, tell the user to add this to their MCP client config and restart:
+
+```json
+{
+  "mcpServers": {
+    "loop11y": { "command": "npx", "args": ["-y", "loop11y"] }
+  }
+}
+```
+
+**Tie-breakers:**
+- Coding agent in a terminal that *also* has loop11y MCP wired: prefer CLI — fewer round-trips, supports auth, easier to script.
+- UI chat with shell-like tools (e.g. ChatGPT Code Interpreter sandbox): CLI works there too, use it.
+- User explicitly asks "use the MCP" or "use the tool": honour that.
+
+The rest of this skill describes the tool surface. The MCP tool names (`evaluate`, `remediate`, etc.) and the CLI subcommands (`audit`, `audit:repo`, `crawl`, `verify`) map 1:1 onto the same underlying functionality. Translate the workflow steps below to whichever runtime you picked.
+
+## CLI ↔ MCP map
+
+| MCP tool | CLI equivalent |
+|---|---|
+| `evaluate({ url })` | `loop11y audit <url> --json` |
+| `crawl_site({ start_url, max_pages })` | `loop11y crawl --url <url> --max-pages <n> --json` |
+| `audit_repo({ root, baseUrl, maxFiles })` | `loop11y audit:repo <path> --base-url <url> --max-files <n> --json` |
+| `audit_component({ path })` | `loop11y audit:file <path> --json` |
+| `remediate({ source_path, audit_url, mode })` | No direct CLI verb yet — use MCP, or call `verify` after manual edits |
+| `fix_component({ path, violation_id })` | No direct CLI verb yet — use MCP |
+| (verification) | `loop11y verify <source-path> --url <url> --json` |
+
+`remediate` and `fix_component` are MCP-only today. If you picked CLI and the user wants source patched, run `loop11y audit` first, then either drop to MCP (start `LOOP11Y_PORT=PORT npx loop11y` and POST `/api/remediate`) or hand the diff to the user.
 
 ## Available tools
 
@@ -18,17 +78,7 @@ Accessibility evaluation, scoring, remediation, crawling, and verification via t
 | `audit_component` | Raw axe violations only. Use when user wants no scoring layer. |
 | `fix_component` | Patch one violation in one source file. Granular alternative to `remediate`. |
 
-If these tools are missing from your tool list, the MCP server is not connected. Show:
-
-```json
-{
-  "mcpServers": {
-    "loop11y": { "command": "npx", "args": ["-y", "loop11y"] }
-  }
-}
-```
-
-Tell the user to add this to their MCP client config and restart.
+If you picked the MCP runtime and these tools are missing from your tool list, the MCP server is not connected. Refer the user back to the MCP config snippet above. If you picked CLI, ignore this block — you do not need these tools.
 
 ---
 
@@ -102,17 +152,17 @@ Re-run `evaluate` on the same URL after fixes. Compare scores. If the dev server
 
 ## Auth for protected pages
 
-If the URL needs auth (logged-in dashboards, staging behind basic auth, header gates), tell the user to run the CLI directly — MCP mode doesn't take auth flags. Give them:
+MCP tool calls do not take auth flags. If the URL needs auth (logged-in dashboards, staging behind basic auth, header gates), switch to the CLI runtime (see "Choose your runtime first") or have the user run:
 
 ```sh
-npx loop11y audit <url> \
+npx -y loop11y audit <url> \
   --storage-state ./playwright/.auth/user.json \
   --header 'x-env: staging' \
   --basic-auth-user USER --basic-auth-pass PASS \
   --markdown
 ```
 
-For programmatic auth they can also run `LOOP11Y_PORT=3000 npx loop11y` and POST to `/api/evaluate`.
+For programmatic auth, `LOOP11Y_PORT=3000 npx -y loop11y` boots the HTTP server; POST to `/api/evaluate` with the same auth payload (see `docs/THREAT-MODEL.md` if the server is not on `127.0.0.1`).
 
 ---
 
