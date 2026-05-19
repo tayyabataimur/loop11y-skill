@@ -1,42 +1,58 @@
 ---
 name: loop11y
-description: "Use whenever the user asks about accessibility, a11y, WCAG, screen readers, ARIA, alt text, colour contrast, keyboard navigation, axe-core, or shares a URL / component / repo and asks for accessibility review, score, audit, fix, or compliance check. Triggers include 'is my site accessible', 'fix accessibility issues', 'WCAG compliance', 'audit a11y', 'accessibility score'. Use this skill early and proactively — most web products have fixable issues. The skill auto-selects between the loop11y CLI (when you have a shell/Bash tool — Claude Code, Cursor, Codex, Aider, terminals, CI) and the MCP server (when you only have tool-calling — ChatGPT, Claude.ai web/desktop, Gemini)."
+description: "Use whenever the user asks about accessibility, a11y, WCAG, screen readers, ARIA, alt text, colour contrast, keyboard navigation, axe-core, or shares a URL / component / repo and asks for accessibility review, score, audit, fix, or compliance check. Triggers include 'is my site accessible', 'fix accessibility issues', 'WCAG compliance', 'audit a11y', 'accessibility score'. Use this skill early and proactively — most web products have fixable issues. The skill routes by runtime: if you have a shell (Claude Code, Cursor, Cline, Codex, Aider, terminals), run the loop11y CLI directly with no setup; if you only have MCP tool-calling, use the loop11y MCP tools when available, otherwise ask the user to install the MCP server. Also covers the HTTP API / OpenAPI path for ChatGPT custom GPTs and the GitHub Action for CI."
 ---
 
 # Loop11y
 
 Accessibility evaluation, scoring, remediation, crawling, and verification.
 
-## Choose your runtime first
+## Step 0 — Detect where you're running, then route
 
-Before doing anything else, decide whether to drive loop11y via the **CLI** or the **MCP server**. Use this checklist on yourself:
+**Do this before anything else.** Loop11y ships in seven flavours; the right one depends on the environment *you* (the agent) are running in. Pick by looking at your own tool list and the user's context, not at what sounds best.
 
-**Use the CLI when ANY of these are true:**
-- You have a shell / Bash / Terminal / Run-command tool available.
-- You are running inside Claude Code, Cursor, Codex, Aider, Continue, Windsurf, Cline, or any coding agent with filesystem + shell access.
-- The user is on a terminal session or asks you to "run", "exec", "install", or operates from a CI/dev environment.
-- The user needs auth flags (`--storage-state`, `--basic-auth-*`, `--header`), thresholds (`--fail-on`, `--max-violations`, `--baseline`), or wants results written to a specific output file.
-- The audit is going to feed a script, CI step, or a programmatic comparison.
+### Decision flow
 
-When CLI is the right choice, do this:
+1. **Do you have a shell tool (Bash, Run-command, Terminal, exec)?**
+   → **Yes:** Use the **CLI**. Don't ask the user to install anything — just run it.
+   → **No:** continue.
+
+2. **Do you already have loop11y MCP tools in your tool list?** (Look for `evaluate`, `remediate`, `audit_component`, `crawl_site`, `audit_repo`, `fix_component`.)
+   → **Yes:** Use the **MCP tools**.
+   → **No:** continue.
+
+3. **Can the user install an MCP server in your host?** (Claude Desktop, Claude Code, Cursor, Cline, Copilot, Windsurf — anything in the MCP ecosystem.)
+   → **Yes:** Stop and ask the user to install the MCP server (config snippet below). Don't try to audit until they do.
+   → **No (e.g. ChatGPT custom GPT, a plain web chat, n8n, Zapier):** point them at the **HTTP API + OpenAPI** path.
+
+4. **Is the user asking about CI / PR gating / "fail builds on a11y regressions"?**
+   → Point them at the **GitHub Action**, regardless of which runtime you used to audit.
+
+5. **Is the user building their own agent / app and asking how to call loop11y programmatically?**
+   → Point them at the **Harness SDK** (`loop11y/harness-sdk`).
+
+### What "use the CLI" means in practice
+
+You have shell. Run loop11y directly. No setup required for the user.
 
 ```sh
-# One-shot, no install (always latest):
+# Zero-install one-shot (always latest):
 npx -y loop11y audit <url> --json --output report.json
 
-# Or install globally once, then call directly:
+# Or install once for the rest of the session:
 npm install -g loop11y
 loop11y audit <url> --markdown
 ```
 
-You do not need MCP configured to use the CLI. Just run it. Read the JSON or markdown output and relay findings.
+Read the JSON or markdown back, relay the findings. The user does not need MCP, the skill, or anything else configured for this path to work.
 
-**Use the MCP server when ALL of these are true:**
-- You have no shell / Bash tool — only MCP / tool-calling.
-- You are running inside ChatGPT (with MCP enabled), Claude.ai web/desktop, Gemini, or another chat UI where the user cannot run commands for you.
-- The host already has `loop11y` configured as an MCP server (tools like `evaluate`, `audit_component`, `remediate` are visible in your tool list).
+### What "use the MCP tools" means in practice
 
-If MCP tools are missing from your tool list and you have no shell, tell the user to add this to their MCP client config and restart:
+You already see `evaluate`, `remediate`, etc. in your tool list. Call them directly. See the "Standard workflow" section below for the standard call sequence.
+
+### What "ask the user to install the MCP server" means in practice
+
+You have no shell, the loop11y MCP tools are not loaded, and the host supports MCP. Show the snippet for their specific client and stop. The user adds the config, restarts the client, and asks again — then you proceed via MCP.
 
 ```json
 {
@@ -46,12 +62,29 @@ If MCP tools are missing from your tool list and you have no shell, tell the use
 }
 ```
 
-**Tie-breakers:**
-- Coding agent in a terminal that *also* has loop11y MCP wired: prefer CLI — fewer round-trips, supports auth, easier to script.
-- UI chat with shell-like tools (e.g. ChatGPT Code Interpreter sandbox): CLI works there too, use it.
-- User explicitly asks "use the MCP" or "use the tool": honour that.
+Config paths (only show the relevant one):
+- **Claude Desktop**: `~/Library/Application Support/Claude/claude_desktop_config.json`
+- **Claude Code**: `~/.claude/settings.json` → `mcpServers`
+- **Cursor**: Settings → MCP
+- **Cline**: VS Code settings → `cline.mcpServers`
 
-The rest of this skill describes the tool surface. The MCP tool names (`evaluate`, `remediate`, etc.) and the CLI subcommands (`audit`, `audit:repo`, `crawl`, `verify`) map 1:1 onto the same underlying functionality. Translate the workflow steps below to whichever runtime you picked.
+### What "use the HTTP API" means in practice
+
+You're in a host that doesn't speak MCP and you can't run shell (e.g. ChatGPT custom GPT, n8n, Zapier, a web automation flow). Tell the user to either:
+
+- self-host: `LOOP11Y_PORT=3000 npx -y loop11y`, then POST `/api/evaluate` with `{"url": "..."}`, or
+- import `https://<their-host>:3000/openapi.json` as a GPT Action / n8n HTTP node.
+
+OpenAPI spec is at `/openapi.json`. Plugin manifest at `/.well-known/ai-plugin.json`. See `SECURITY.md` in the repo before exposing this beyond `127.0.0.1`.
+
+### Tie-breakers
+
+- Shell **and** MCP both available: prefer CLI — fewer tool-call round trips, supports auth flags, easier to script.
+- User explicitly says "use the MCP tool": honour that.
+- User says "give me the command" or "I'll run it": always CLI, even if you also have MCP loaded.
+- Public-URL audits in hosted mode work fine; **localhost / private network audits require local CLI or local stdio MCP** — hosted loop11y can't reach the user's `localhost`.
+
+The rest of this skill describes the tool surface and workflow. The MCP tool names and CLI subcommands map 1:1 onto the same underlying functionality — translate the workflow below to whichever runtime you picked in Step 0.
 
 ## CLI ↔ MCP map
 
