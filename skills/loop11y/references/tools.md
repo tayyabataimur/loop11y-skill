@@ -1,6 +1,8 @@
 # Loop11y Tool Reference
 
-Complete input/output documentation for all six tools.
+Complete input/output documentation for all six MCP tools, plus the CLI and HTTP API surfaces.
+
+> Tool naming: MCP exposes `evaluate`, `remediate`, `audit_component`, `fix_component`, `audit_repo`, `crawl_site`. CLI exposes `audit`, `audit:file`, `audit:repo`, `crawl`, `verify`, `diff`. HTTP exposes `/api/evaluate`, `/api/remediate`, `/api/repo-audit`, `/api/crawl`, `/api/verify`, `/mcp`. Schemas below describe MCP tool I/O; HTTP request/response bodies mirror them.
 
 ---
 
@@ -176,7 +178,7 @@ Patches a single violation in a source file.
 
 | ID | Patches | WCAG |
 |---|---|---|
-| `image-alt` | Adds `alt=""` to img elements | 1.1.1 (A) |
+| `image-alt` | Adds `alt=""` to img elements (`.tsx`/`.jsx`/`.html`/`.vue`/`.svelte`) | 1.1.1 (A) |
 | `button-name` | Adds `aria-label` to nameless buttons | 4.1.2 (A) |
 | `link-name` | Adds `aria-label` to nameless links | 2.4.4 (A) |
 | `label` | Annotates inputs missing a label | 1.3.1, 4.1.2 (A) |
@@ -273,3 +275,84 @@ Scans a project directory and returns violations across all files, sorted by sev
   timestamp: string;
 }
 ```
+
+---
+
+## CLI commands
+
+Same engine as MCP. Use when shell is available.
+
+### `loop11y audit <url>`
+
+Audit a single live URL.
+
+Flags: `--json` (default) · `--markdown` · `--sarif` · `--html` · `--output <file>` · `--storage-state <path>` · `--header 'k: v'` (repeatable) · `--basic-auth-user <u>` · `--basic-auth-pass <p>` · `--fail-on critical|serious|moderate|minor` · `--max-violations <n>` · `--baseline <report.json>`.
+
+### `loop11y audit:file <path>`
+
+Audit a local `.html` file. Same output flags as `audit`.
+
+### `loop11y audit:repo <path>`
+
+Scan a checked-out project. Flags: `--max-files <n>` (default 20, max 100) · `--base-url <url>` (required for `.tsx`/`.jsx`/`.vue`/`.svelte`).
+
+### `loop11y crawl`
+
+One of `--url <start>`, `--sitemap <url>`, or `--routes <file>` required. Flags: `--max-pages <n>` (default 10, max 50) · `--include-pattern <regex>` · `--exclude-pattern <regex>` · output + threshold flags as above.
+
+Auto-detects `/sitemap.xml`, `/sitemap_index.xml`, `robots.txt` `Sitemap:` directives. Tracking params (`utm_*`, `gclid`, `fbclid`) stripped pre-dedupe. SPA routes discovered post-hydration.
+
+### `loop11y verify <source-path> --url <url>`
+
+Re-audit URL after a remediation. Returns score and delta vs prior audit if `--baseline` given. **CLI / HTTP only — not MCP.** From MCP, just call `evaluate` again.
+
+### `loop11y diff <before.json> <after.json>`
+
+Build a before/after HTML or JSON report. Flags: `--output <file>` · `--html` · `--json`.
+
+---
+
+## HTTP API
+
+Start: `LOOP11Y_PORT=3000 npx -y loop11y` (or Docker / Fly).
+
+| Endpoint | Body shape | Notes |
+|---|---|---|
+| `POST /api/evaluate` | `{ url, include_html_snippets?, include_passing? }` | Same as MCP `evaluate`. |
+| `POST /api/crawl` | `{ start_url?, sitemap_url?, max_pages?, include_html_snippets? }` | Same as MCP `crawl_site`. |
+| `POST /api/repo-audit` | `{ root, baseUrl?, maxFiles? }` | Same as MCP `audit_repo`. |
+| `POST /api/remediate` | `{ source_path, audit_url, mode, min_severity?, only? }` | Same as MCP `remediate`. |
+| `POST /api/verify` | `{ source_path, url, baseline? }` | CLI / HTTP only. |
+| `POST /mcp` | streamable HTTP MCP transport | For MCP clients that prefer HTTP over stdio. |
+| `GET /openapi.json` | — | Full OpenAPI 3 spec. Wire into ChatGPT custom GPT Action. |
+| `GET /.well-known/ai-plugin.json` | — | Plugin manifest. |
+| `GET /health` | — | Liveness. |
+
+---
+
+## GitHub Action
+
+```yaml
+- uses: tayyabataimur/loop11y/action@v0.1.0
+  with:
+    url: https://staging.example.com   # or path: ./ for repo audit
+    fail-under: 90                     # fail job below this score
+    fail-on: critical                  # alt gate: fail on any of this severity
+    output: report.md                  # written + posted as PR comment
+```
+
+Composite Action — runs the CLI internally. Posts Markdown report as PR comment, sets check status.
+
+---
+
+## Harness SDK
+
+```ts
+import { Loop11yClient } from "loop11y/harness-sdk";
+
+const client = new Loop11yClient({ baseUrl: "http://localhost:3000" });
+const audit = await client.evaluate({ url: "https://example.com" });
+const fix   = await client.remediate({ source_path: "...", audit_url: "...", mode: "diff" });
+```
+
+Lightweight Node client over the HTTP API. Use when building custom harnesses, agents, or scripts.
